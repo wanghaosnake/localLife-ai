@@ -6,6 +6,7 @@ import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.locallife.config.RabbitMQConfig;
 import com.locallife.dto.Result;
 import com.locallife.entity.RedisData;
 import com.locallife.entity.Shop;
@@ -13,18 +14,24 @@ import com.locallife.mapper.ShopMapper;
 import com.locallife.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.locallife.utils.CacheClient;
+import com.locallife.utils.SimpleRedisLock;
 import com.locallife.utils.SystemConstants;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.geo.Distance;
 import org.springframework.data.geo.GeoResult;
 import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.temporal.TemporalUnit;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -40,6 +47,7 @@ import static com.locallife.utils.RedisConstants.*;
  * @author 虎哥
  * @since 2021-12-22
  */
+@Slf4j
 @Service
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
     @Resource
@@ -47,6 +55,9 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     @Resource
     private CacheClient   cacheClient;
+
+    @Resource
+    private RabbitTemplate rabbitTemplate;
 
     //自定义线程池:用于快速获得异步线程
     private static final ExecutorService CACHE_REBUILD_EXECUTOR= Executors.newFixedThreadPool(10);
@@ -62,8 +73,8 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         //Shop shop = queryWithMutex(id);
 
         //缓存击穿2:逻辑过期
-//        Shop shop = queryWithLogicalExpire(id);
-        Shop shop = cacheClient.queryWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class, id2 -> getById(id2), 20L, TimeUnit.MINUTES);
+        Shop shop = queryWithLogicalExpire(id);
+//        Shop shop = cacheClient.queryWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class, id2 -> getById(id2), 20L, TimeUnit.MINUTES);
         if(shop == null){
             return Result.fail("店铺不存在!");
         }
@@ -81,55 +92,36 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         }
         updateById(shop);
 
-        stringRedisTemplate.delete(CACHE_SHOP_KEY + shop.getId());
+        // 2. 删除缓存（无论成功与否，都发送MQ消息作为双重保障）
+        String cacheKey = CACHE_SHOP_KEY + shop.getId();
+        boolean cacheExisted = Boolean.TRUE.equals(stringRedisTemplate.hasKey(cacheKey));
+        Boolean deleted = stringRedisTemplate.delete(cacheKey);
+
+
+
+//         仅在缓存存在且删除失败时发送（减少消息量）
+         if (cacheExisted && !Boolean.TRUE.equals(deleted)) {
+             try {
+                 Map<String, Object> msg = new HashMap<>();
+                 msg.put("shopId", id);
+                 // 发送到DATA交换机，对应DATA_QUEUE
+                 rabbitTemplate.convertAndSend(
+                         RabbitMQConfig.DATA_EXCHANGE,
+                         RabbitMQConfig.DATA_ROUTING_KEY,
+                         JSONUtil.toJsonStr(msg)
+                 );
+                 log.info("发送店铺缓存清理MQ消息成功，shopId:{}", id);
+             } catch (Exception e) {
+                 log.error("发送店铺缓存清理MQ消息失败，shopId:{}", id, e);
+             }
+         }
         return Result.ok();
     }
 
-    @Override
-    public Result queryShopByType(Integer typeId, Integer current, Double x, Double y) {
-        if(x==null || y==null){
-            Page<Shop> page = query()
-                    .eq("type_id", typeId)
-                    .page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE));
-            return Result.ok(page.getRecords());
-        }
-
-        String key = SHOP_GEO_KEY + typeId;
-        int from = (current - 1) * SystemConstants.DEFAULT_PAGE_SIZE;
-        int end = current * SystemConstants.DEFAULT_PAGE_SIZE;
 
 
-//        GeoResults<RedisGeoCommands.GeoLocation<String>> results = stringRedisTemplate.opsForGeo();
-//                .search(
-//                        key,
-//                        GeoReference.fromCoordinate(x, y),
-//                        new Distance(5000),
-//                        RedisGeoCommands.GeoSearchCommandArgs.newGeoSearchArgs().includeDistance().limit(end)
-//                );
 
-        if(null==null){
-            return Result.ok(Collections.emptyList());
-        }
 
-        
-        List<GeoResult<RedisGeoCommands.GeoLocation<String>>> list =new ArrayList<>();
-        List<Long>  ids= new ArrayList<>(list.size());
-        Map<String,Distance> distanceMap=new HashMap<>(list.size());
-        list.stream().skip(from).forEach(result->{
-            String shopStr = result.getContent().getName();
-            ids.add(Long.valueOf(shopStr));
-            Distance distance = result.getDistance();
-            distanceMap.put(shopStr,distance);
-        });
-        String idsStr = StrUtil.join(",", ids);
-        List<Shop> shops = query().in("id", ids).last("ORDER BY FIELD(id," + idsStr + ")").list();
-        for (Shop shop : shops) {
-            shop.setDistance(distanceMap.get(shop.getId().toString()).getValue());
-        }
-
-        return Result.ok(shops);
-
-    }
 
     //缓存击穿1:互斥锁方式
     public Shop queryWithMutex(Long id) throws InterruptedException {
@@ -195,8 +187,9 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             return shop;
         }
 
-        String key = LOCK_SHOP_KEY + id;
-        boolean isLock = this.tryLock(key);
+        String lockKey = LOCK_SHOP_KEY + id;
+        boolean isLock = tryLock(lockKey);
+
         if(isLock){
             //获取锁成功,开启独立线程,实现缓存重建
             CACHE_REBUILD_EXECUTOR.submit(()->{
@@ -205,7 +198,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 } finally {
-                    this.unlock(key);
+                    unlock(lockKey);
                 }
             });
         }

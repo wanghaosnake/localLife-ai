@@ -18,6 +18,52 @@ spring:
         max-idle: 10
         min-idle: 1
         time-between-eviction-runs: 10s
+  rabbitmq:
+    host: 192.168.150.101
+    port: 5672
+    username: sl
+    password: sl321
+    virtual-host: /dispatch
+
+    # 生产者配置
+    publisher-confirm-type: correlated  # 发送消息的异步回调
+    publisher-returns: true             # 开启publish-return功能
+    template:
+      mandatory: true                   # 消息路由失败时的策略
+
+    # 连接和缓存优化
+    connection-timeout: 1000            # 连接超时（毫秒）
+    cache:
+      channel:
+        size: 50                        # 缓存channel数量（默认25）
+        checkout-timeout: 1000          # 获取channel超时
+      connection:
+        mode: CHANNEL                   # 缓存模式
+
+    # 消费者配置（重点优化）
+    listener:
+      simple:
+        # 并发配置（大幅提升性能）
+        concurrency: 10                 # 最小消费者数（默认1）
+        max-concurrency: 50             # 最大消费者数（默认1）
+        prefetch: 50                    # 预取消息数（默认250，建议50-100）
+
+        # 确认模式
+        acknowledge-mode: manual        # 改为手动确认，更可靠
+
+        # 重试配置（关闭自动重试，用代码控制）
+        retry:
+          enabled: false                # 关闭自动重试，避免阻塞
+          # 如需开启，建议如下配置
+          # enabled: true
+          # initial-interval: 100       # 初始100ms（原1000ms太长）
+          # multiplier: 2               # 倍数2
+          # max-attempts: 3
+          # stateless: true
+
+        # 其他优化
+        default-requeue-rejected: true  # 拒绝后重新入队
+        idle-event-interval: 10000      # 空闲事件间隔（毫秒）
   jackson:
     default-property-inclusion: non_null # JSON处理时忽略非空字段
 mybatis-plus:
@@ -25,3 +71,4 @@ mybatis-plus:
 logging:
   level:
     com.hmdp: debug
+

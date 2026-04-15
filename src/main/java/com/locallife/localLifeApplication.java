@@ -8,10 +8,10 @@ import org.springframework.context.annotation.EnableAspectJAutoProxy;
 @MapperScan("com.locallife.mapper")
 @SpringBootApplication
 @EnableAspectJAutoProxy(exposeProxy=true)
-public class LocalLifePingApplication {
+public class localLifeApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(LocalLifePingApplication.class, args);
+        SpringApplication.run(localLifeApplication.class, args);
     }
 
 }

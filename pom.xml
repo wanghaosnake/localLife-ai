@@ -8,14 +8,14 @@
         <version>2.3.12.RELEASE</version>
         <relativePath/>
     </parent>
-    <groupId>com.hmdp</groupId>
-    <artifactId>locallife-sp</artifactId>
+    <groupId>com.localLife-ai</groupId>
+    <artifactId>localLife-ai</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>hm-dianping</name>
     <description>Demo project for Spring Boot</description>
 
     <properties>
-        <java.version>1.8</java.version>
+        <java.version>11</java.version>
         <lettuce.version>5.3.4.RELEASE</lettuce.version>
     </properties>
 
@@ -33,6 +33,10 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
         </dependency>
         <dependency>
             <groupId>org.apache.commons</groupId>

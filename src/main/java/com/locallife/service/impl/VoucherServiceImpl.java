@@ -1,5 +1,6 @@
 package com.locallife.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.locallife.dto.Result;
 import com.locallife.entity.Voucher;
@@ -10,6 +11,7 @@ import com.locallife.service.IVoucherService;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
 
 import javax.annotation.Resource;
 import java.util.List;
@@ -36,7 +38,7 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
     @Override
     public Result queryVoucherOfShop(Long shopId) {
         // 查询优惠券信息
-        List<Voucher> vouchers = getBaseMapper().queryVoucherOfShop(shopId);
+        List<Voucher> vouchers = this.list(new QueryWrapper<Voucher>().eq("shop_id", shopId));
         // 返回结果
         return Result.ok(vouchers);
     }

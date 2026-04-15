@@ -24,6 +24,9 @@ import java.time.LocalDateTime;
 @Accessors(chain = true)
 @TableName("tb_blog")
 public class Blog implements Serializable {
+    public Blog(Long id) {
+        this.id = id;
+    }
 
     private static final long serialVersionUID = 1L;
 
